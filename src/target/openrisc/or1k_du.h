@@ -41,23 +41,28 @@ struct or1k_du {
 
 	int (*or1k_jtag_init)(struct or1k_jtag *jtag_info);
 
-	int (*or1k_is_cpu_running)(struct or1k_jtag *jtag_info, int *running);
+	int (*or1k_is_cpu_running)(struct or1k_jtag *jtag_info,
+				   const int coreid, int *running);
 
-	int (*or1k_cpu_stall)(struct or1k_jtag *jtag_info, int action);
+	int (*or1k_cpu_stall)(struct or1k_jtag *jtag_info,
+			      const int coreid, int action);
 
-	int (*or1k_cpu_reset)(struct or1k_jtag *jtag_info, int action);
+	int (*or1k_cpu_reset)(struct or1k_jtag *jtag_info,
+			      const int coreid, int action);
 
 	int (*or1k_jtag_read_cpu)(struct or1k_jtag *jtag_info,
-				  uint32_t addr, int count, uint32_t *value);
+				  const int coreid, uint32_t addr, int count, uint32_t *value);
 
 	int (*or1k_jtag_write_cpu)(struct or1k_jtag *jtag_info,
-				   uint32_t addr, int count, const uint32_t *value);
+				   const int coreid, uint32_t addr, int count, const uint32_t *value);
 
-	int (*or1k_jtag_read_memory)(struct or1k_jtag *jtag_info, uint32_t addr, uint32_t size,
+	int (*or1k_jtag_read_memory)(struct or1k_jtag *jtag_info,
+					const enum target_endianness endianness, uint32_t addr, uint32_t size,
 					int count, uint8_t *buffer);
 
-	int (*or1k_jtag_write_memory)(struct or1k_jtag *jtag_info, uint32_t addr, uint32_t size,
-					 int count, const uint8_t *buffer);
+	int (*or1k_jtag_write_memory)(struct or1k_jtag *jtag_info,
+					const enum target_endianness endianness, uint32_t addr, uint32_t size,
+					int count, const uint8_t *buffer);
 };
 
 static inline struct or1k_du *or1k_jtag_to_du(struct or1k_jtag *jtag_info)
@@ -67,7 +72,7 @@ static inline struct or1k_du *or1k_jtag_to_du(struct or1k_jtag *jtag_info)
 
 static inline struct or1k_du *or1k_to_du(struct or1k_common *or1k)
 {
-	struct or1k_jtag *jtag = &or1k->jtag;
+	struct or1k_jtag *jtag = or1k->jtag;
 	return (struct or1k_du *)jtag->du_core;
 }
 

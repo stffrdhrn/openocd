@@ -739,7 +739,7 @@ retry_full_write:
 
 /* Currently hard set in functions to 32-bits */
 static int or1k_adv_jtag_read_cpu(struct or1k_jtag *jtag_info,
-		uint32_t addr, int count, uint32_t *value)
+		const int coreid, uint32_t addr, int count, uint32_t *value)
 {
 	int retval;
 	if (!jtag_info->or1k_jtag_inited) {
@@ -748,7 +748,7 @@ static int or1k_adv_jtag_read_cpu(struct or1k_jtag *jtag_info,
 			return retval;
 	}
 
-	retval = adbg_select_module(jtag_info, DC_CPU0);
+	retval = adbg_select_module(jtag_info, DC_CPU0 + coreid);
 	if (retval != ERROR_OK)
 		return retval;
 
@@ -756,7 +756,7 @@ static int or1k_adv_jtag_read_cpu(struct or1k_jtag *jtag_info,
 }
 
 static int or1k_adv_jtag_write_cpu(struct or1k_jtag *jtag_info,
-		uint32_t addr, int count, const uint32_t *value)
+		const int coreid, uint32_t addr, int count, const uint32_t *value)
 {
 	int retval;
 	if (!jtag_info->or1k_jtag_inited) {
@@ -765,14 +765,15 @@ static int or1k_adv_jtag_write_cpu(struct or1k_jtag *jtag_info,
 			return retval;
 	}
 
-	retval = adbg_select_module(jtag_info, DC_CPU0);
+	retval = adbg_select_module(jtag_info, DC_CPU0 + coreid);
 	if (retval != ERROR_OK)
 		return retval;
 
 	return adbg_wb_burst_write(jtag_info, (uint8_t *)value, 4, count, addr);
 }
 
-static int or1k_adv_cpu_stall(struct or1k_jtag *jtag_info, int action)
+static int or1k_adv_cpu_stall(struct or1k_jtag *jtag_info,
+		const int coreid, int action)
 {
 	int retval;
 	if (!jtag_info->or1k_jtag_inited) {
@@ -781,7 +782,7 @@ static int or1k_adv_cpu_stall(struct or1k_jtag *jtag_info, int action)
 			return retval;
 	}
 
-	retval = adbg_select_module(jtag_info, DC_CPU0);
+	retval = adbg_select_module(jtag_info, DC_CPU0 + coreid);
 	if (retval != ERROR_OK)
 		return retval;
 
@@ -795,14 +796,15 @@ static int or1k_adv_cpu_stall(struct or1k_jtag *jtag_info, int action)
 	else
 		cpu_cr &= ~DBG_CPU_CR_STALL;
 
-	retval = adbg_select_module(jtag_info, DC_CPU0);
+	retval = adbg_select_module(jtag_info, DC_CPU0 + coreid);
 	if (retval != ERROR_OK)
 		return retval;
 
 	return adbg_ctrl_write(jtag_info, DBG_CPU0_REG_STATUS, &cpu_cr, 2);
 }
 
-static int or1k_adv_is_cpu_running(struct or1k_jtag *jtag_info, int *running)
+static int or1k_adv_is_cpu_running(struct or1k_jtag *jtag_info,
+		const int coreid, int *running)
 {
 	int retval;
 	if (!jtag_info->or1k_jtag_inited) {
@@ -813,7 +815,7 @@ static int or1k_adv_is_cpu_running(struct or1k_jtag *jtag_info, int *running)
 
 	int current = jtag_info->or1k_jtag_module_selected;
 
-	retval = adbg_select_module(jtag_info, DC_CPU0);
+	retval = adbg_select_module(jtag_info, DC_CPU0 + coreid);
 	if (retval != ERROR_OK)
 		return retval;
 
@@ -836,7 +838,8 @@ static int or1k_adv_is_cpu_running(struct or1k_jtag *jtag_info, int *running)
 	return ERROR_OK;
 }
 
-static int or1k_adv_cpu_reset(struct or1k_jtag *jtag_info, int action)
+static int or1k_adv_cpu_reset(struct or1k_jtag *jtag_info,
+		const int coreid, int action)
 {
 	int retval;
 	if (!jtag_info->or1k_jtag_inited) {
@@ -845,7 +848,7 @@ static int or1k_adv_cpu_reset(struct or1k_jtag *jtag_info, int action)
 			return retval;
 	}
 
-	retval = adbg_select_module(jtag_info, DC_CPU0);
+	retval = adbg_select_module(jtag_info, DC_CPU0 + coreid);
 	if (retval != ERROR_OK)
 		return retval;
 
@@ -859,7 +862,7 @@ static int or1k_adv_cpu_reset(struct or1k_jtag *jtag_info, int action)
 	else
 		cpu_cr &= ~DBG_CPU_CR_RESET;
 
-	retval = adbg_select_module(jtag_info, DC_CPU0);
+	retval = adbg_select_module(jtag_info, DC_CPU0 + coreid);
 	if (retval != ERROR_OK)
 		return retval;
 
@@ -867,7 +870,7 @@ static int or1k_adv_cpu_reset(struct or1k_jtag *jtag_info, int action)
 }
 
 static int or1k_adv_jtag_read_memory(struct or1k_jtag *jtag_info,
-			    uint32_t addr, uint32_t size, int count, uint8_t *buffer)
+		const enum target_endianness endianness, uint32_t addr, uint32_t size, int count, uint8_t *buffer)
 {
 	LOG_DEBUG("Reading WB%" PRId32 " at 0x%08" PRIx32, size * 8, addr);
 
@@ -906,8 +909,7 @@ static int or1k_adv_jtag_read_memory(struct or1k_jtag *jtag_info,
 	 * So if the target endian is big, change the order.
 	 */
 
-	struct target *target = jtag_info->target;
-	if ((target->endianness == TARGET_BIG_ENDIAN) && (size != 1)) {
+	if ((endianness == TARGET_BIG_ENDIAN) && (size != 1)) {
 		switch (size) {
 		case 4:
 			buf_bswap32(buffer, buffer, size * count);
@@ -922,7 +924,7 @@ static int or1k_adv_jtag_read_memory(struct or1k_jtag *jtag_info,
 }
 
 static int or1k_adv_jtag_write_memory(struct or1k_jtag *jtag_info,
-			     uint32_t addr, uint32_t size, int count, const uint8_t *buffer)
+		const enum target_endianness endianness, uint32_t addr, uint32_t size, int count, const uint8_t *buffer)
 {
 	LOG_DEBUG("Writing WB%" PRId32 " at 0x%08" PRIx32, size * 8, addr);
 
@@ -943,8 +945,7 @@ static int or1k_adv_jtag_write_memory(struct or1k_jtag *jtag_info,
 	 */
 
 	void *t = NULL;
-	struct target *target = jtag_info->target;
-	if ((target->endianness == TARGET_BIG_ENDIAN) && (size != 1)) {
+	if ((endianness == TARGET_BIG_ENDIAN) && (size != 1)) {
 		t = malloc(count * size * sizeof(uint8_t));
 		if (t == NULL) {
 			LOG_ERROR("Out of memory");

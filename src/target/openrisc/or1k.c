@@ -47,7 +47,16 @@ static int or1k_remove_breakpoint(struct target *target,
 static int or1k_read_core_reg(struct target *target, int num);
 static int or1k_write_core_reg(struct target *target, int num);
 
-static struct or1k_core_reg *or1k_core_reg_list_arch_info;
+static struct or1k_common or1k_init = {
+	.arch_info = NULL,
+	.nb_regs = 0,
+};
+static struct or1k_jtag jtag_state = {
+	.du_core = NULL,
+	.tap_ip = NULL,
+	.or1k_jtag_inited = 0,
+	.or1k_jtag_module_selected = -1,
+};
 
 static const struct or1k_core_reg_init or1k_init_reg_list[] = {
 	{"r0"       , GROUP0 + 1024, "org.gnu.gdb.or1k.group0", NULL},
@@ -232,44 +241,41 @@ static const struct or1k_core_reg_init or1k_init_reg_list[] = {
 	{"ttcr"     , GROUP10 + 1,   "org.gnu.gdb.or1k.group10", "timer"},
 };
 
-static int or1k_add_reg(struct target *target, struct or1k_core_reg *new_reg)
+static int or1k_add_reg(struct or1k_core_reg *new_reg)
 {
-	struct or1k_common *or1k = target_to_or1k(target);
-	int reg_list_size = or1k->nb_regs * sizeof(struct or1k_core_reg);
+	int reg_list_size = or1k_init.nb_regs * sizeof(struct or1k_core_reg);
 
-	or1k_core_reg_list_arch_info = realloc(or1k_core_reg_list_arch_info,
+	or1k_init.arch_info = realloc(or1k_init.arch_info,
 				reg_list_size + sizeof(struct or1k_core_reg));
 
-	memcpy(&or1k_core_reg_list_arch_info[or1k->nb_regs], new_reg,
+	memcpy(&or1k_init.arch_info[or1k_init.nb_regs], new_reg,
 		sizeof(struct or1k_core_reg));
 
-	or1k_core_reg_list_arch_info[or1k->nb_regs].list_num = or1k->nb_regs;
+	or1k_init.arch_info[or1k_init.nb_regs].list_num = or1k_init.nb_regs;
 
-	or1k->nb_regs++;
+	or1k_init.nb_regs++;
 
 	return ERROR_OK;
 }
 
 static int or1k_create_reg_list(struct target *target)
 {
-	struct or1k_common *or1k = target_to_or1k(target);
-
 	LOG_DEBUG("-");
 
-	or1k_core_reg_list_arch_info = malloc(ARRAY_SIZE(or1k_init_reg_list) *
+	or1k_init.arch_info = malloc(ARRAY_SIZE(or1k_init_reg_list) *
 				       sizeof(struct or1k_core_reg));
 
 	for (int i = 0; i < (int)ARRAY_SIZE(or1k_init_reg_list); i++) {
-		or1k_core_reg_list_arch_info[i].name = or1k_init_reg_list[i].name;
-		or1k_core_reg_list_arch_info[i].spr_num = or1k_init_reg_list[i].spr_num;
-		or1k_core_reg_list_arch_info[i].group = or1k_init_reg_list[i].group;
-		or1k_core_reg_list_arch_info[i].feature = or1k_init_reg_list[i].feature;
-		or1k_core_reg_list_arch_info[i].list_num = i;
-		or1k_core_reg_list_arch_info[i].target = NULL;
-		or1k_core_reg_list_arch_info[i].or1k_common = NULL;
+		or1k_init.arch_info[i].name = or1k_init_reg_list[i].name;
+		or1k_init.arch_info[i].spr_num = or1k_init_reg_list[i].spr_num;
+		or1k_init.arch_info[i].group = or1k_init_reg_list[i].group;
+		or1k_init.arch_info[i].feature = or1k_init_reg_list[i].feature;
+		or1k_init.arch_info[i].list_num = i;
+		or1k_init.arch_info[i].target = NULL;
+		or1k_init.arch_info[i].or1k_common = NULL;
 	}
 
-	or1k->nb_regs = ARRAY_SIZE(or1k_init_reg_list);
+	or1k_init.nb_regs = ARRAY_SIZE(or1k_init_reg_list);
 
 	struct or1k_core_reg new_reg;
 	new_reg.target = NULL;
@@ -284,14 +290,14 @@ static int or1k_create_reg_list(struct target *target)
 			new_reg.spr_num = GROUP1 + 512 + i + (way * 256);
 			new_reg.feature = "org.gnu.gdb.or1k.group1";
 			new_reg.group = "dmmu";
-			or1k_add_reg(target, &new_reg);
+			or1k_add_reg(&new_reg);
 
 			sprintf(name, "dtlbw%dtr%d", way, i);
 			new_reg.name = strdup(name);
 			new_reg.spr_num = GROUP1 + 640 + i + (way * 256);
 			new_reg.feature = "org.gnu.gdb.or1k.group1";
 			new_reg.group = "dmmu";
-			or1k_add_reg(target, &new_reg);
+			or1k_add_reg(&new_reg);
 
 
 			sprintf(name, "itlbw%dmr%d", way, i);
@@ -299,7 +305,7 @@ static int or1k_create_reg_list(struct target *target)
 			new_reg.spr_num = GROUP2 + 512 + i + (way * 256);
 			new_reg.feature = "org.gnu.gdb.or1k.group2";
 			new_reg.group = "immu";
-			or1k_add_reg(target, &new_reg);
+			or1k_add_reg(&new_reg);
 
 
 			sprintf(name, "itlbw%dtr%d", way, i);
@@ -307,7 +313,7 @@ static int or1k_create_reg_list(struct target *target)
 			new_reg.spr_num = GROUP2 + 640 + i + (way * 256);
 			new_reg.feature = "org.gnu.gdb.or1k.group2";
 			new_reg.group = "immu";
-			or1k_add_reg(target, &new_reg);
+			or1k_add_reg(&new_reg);
 
 		}
 	}
@@ -315,24 +321,26 @@ static int or1k_create_reg_list(struct target *target)
 	return ERROR_OK;
 }
 
-static int or1k_jtag_read_regs(struct or1k_common *or1k, uint32_t *regs)
+static int or1k_jtag_read_regs(struct target *target, uint32_t *regs)
 {
-	struct or1k_du *du_core = or1k_jtag_to_du(&or1k->jtag);
+	struct or1k_common *or1k = target_to_or1k(target);
+	struct or1k_du *du_core = or1k_to_du(or1k);
 
 	LOG_DEBUG("-");
 
-	return du_core->or1k_jtag_read_cpu(&or1k->jtag,
+	return du_core->or1k_jtag_read_cpu(or1k->jtag, target->coreid,
 			or1k->arch_info[OR1K_REG_R0].spr_num, OR1K_REG_R31 + 1,
 			regs + OR1K_REG_R0);
 }
 
-static int or1k_jtag_write_regs(struct or1k_common *or1k, uint32_t *regs)
+static int or1k_jtag_write_regs(struct target *target, uint32_t *regs)
 {
-	struct or1k_du *du_core = or1k_jtag_to_du(&or1k->jtag);
+	struct or1k_common *or1k = target_to_or1k(target);
+	struct or1k_du *du_core = or1k_to_du(or1k);
 
 	LOG_DEBUG("-");
 
-	return du_core->or1k_jtag_write_cpu(&or1k->jtag,
+	return du_core->or1k_jtag_write_cpu(or1k->jtag, target->coreid,
 			or1k->arch_info[OR1K_REG_R0].spr_num, OR1K_REG_R31 + 1,
 			&regs[OR1K_REG_R0]);
 }
@@ -349,14 +357,14 @@ static int or1k_save_context(struct target *target)
 	for (int i = 0; i < OR1KNUMCOREREGS; i++) {
 		if (!or1k->core_cache->reg_list[i].valid) {
 			if (i == OR1K_REG_PPC || i == OR1K_REG_NPC || i == OR1K_REG_SR) {
-				retval = du_core->or1k_jtag_read_cpu(&or1k->jtag,
+				retval = du_core->or1k_jtag_read_cpu(or1k->jtag, target->coreid,
 						or1k->arch_info[i].spr_num, 1,
 						&or1k->core_regs[i]);
 				if (retval != ERROR_OK)
 					return retval;
 			} else if (!regs_read) {
 				/* read gpr registers at once (but only one time in this loop) */
-				retval = or1k_jtag_read_regs(or1k, or1k->core_regs);
+				retval = or1k_jtag_read_regs(target, or1k->core_regs);
 				if (retval != ERROR_OK)
 					return retval;
 				/* prevent next reads in this loop */
@@ -385,7 +393,7 @@ static int or1k_restore_context(struct target *target)
 			or1k_write_core_reg(target, i);
 
 			if (i == OR1K_REG_PPC || i == OR1K_REG_NPC || i == OR1K_REG_SR) {
-				retval = du_core->or1k_jtag_write_cpu(&or1k->jtag,
+				retval = du_core->or1k_jtag_write_cpu(or1k->jtag, target->coreid,
 						or1k->arch_info[i].spr_num, 1,
 						&or1k->core_regs[i]);
 				if (retval != ERROR_OK) {
@@ -399,7 +407,7 @@ static int or1k_restore_context(struct target *target)
 
 	if (reg_write) {
 		/* read gpr registers at once (but only one time in this loop) */
-		retval = or1k_jtag_write_regs(or1k, or1k->core_regs);
+		retval = or1k_jtag_write_regs(target, or1k->core_regs);
 		if (retval != ERROR_OK) {
 			LOG_ERROR("Error while restoring context");
 			return retval;
@@ -428,7 +436,7 @@ static int or1k_read_core_reg(struct target *target, int num)
 		or1k->core_cache->reg_list[num].dirty = 0;
 	} else {
 		/* This is an spr, always read value from HW */
-		int retval = du_core->or1k_jtag_read_cpu(&or1k->jtag,
+		int retval = du_core->or1k_jtag_read_cpu(or1k->jtag, target->coreid,
 							 or1k->arch_info[num].spr_num, 1, &reg_value);
 		if (retval != ERROR_OK) {
 			LOG_ERROR("Error while reading spr 0x%08" PRIx32, or1k->arch_info[num].spr_num);
@@ -491,7 +499,7 @@ static int or1k_set_core_reg(struct reg *reg, uint8_t *buf)
 		reg->valid = 1;
 	} else {
 		/* This is an spr, write it to the HW */
-		int retval = du_core->or1k_jtag_write_cpu(&or1k->jtag,
+		int retval = du_core->or1k_jtag_write_cpu(or1k->jtag, target->coreid,
 							  or1k_reg->spr_num, 1, &value);
 		if (retval != ERROR_OK) {
 			LOG_ERROR("Error while writing spr 0x%08" PRIx32, or1k_reg->spr_num);
@@ -512,9 +520,9 @@ static struct reg_cache *or1k_build_reg_cache(struct target *target)
 	struct or1k_common *or1k = target_to_or1k(target);
 	struct reg_cache **cache_p = register_get_last_cache_p(&target->reg_cache);
 	struct reg_cache *cache = malloc(sizeof(struct reg_cache));
-	struct reg *reg_list = calloc(or1k->nb_regs, sizeof(struct reg));
+	struct reg *reg_list = calloc(or1k_init.nb_regs, sizeof(struct reg));
 	struct or1k_core_reg *arch_info =
-		malloc((or1k->nb_regs) * sizeof(struct or1k_core_reg));
+		malloc((or1k_init.nb_regs) * sizeof(struct or1k_core_reg));
 	struct reg_feature *feature;
 
 	LOG_DEBUG("-");
@@ -523,22 +531,23 @@ static struct reg_cache *or1k_build_reg_cache(struct target *target)
 	cache->name = "OpenRISC 1000 registers";
 	cache->next = NULL;
 	cache->reg_list = reg_list;
-	cache->num_regs = or1k->nb_regs;
+	cache->num_regs = or1k_init.nb_regs;
 	(*cache_p) = cache;
 	or1k->core_cache = cache;
 	or1k->arch_info = arch_info;
+	or1k->nb_regs = or1k_init.nb_regs;
 
-	for (int i = 0; i < or1k->nb_regs; i++) {
-		arch_info[i] = or1k_core_reg_list_arch_info[i];
+	for (int i = 0; i < or1k_init.nb_regs; i++) {
+		arch_info[i] = or1k_init.arch_info[i];
 		arch_info[i].target = target;
 		arch_info[i].or1k_common = or1k;
-		reg_list[i].name = or1k_core_reg_list_arch_info[i].name;
+		reg_list[i].name = or1k_init.arch_info[i].name;
 
 		feature = malloc(sizeof(struct reg_feature));
-		feature->name = or1k_core_reg_list_arch_info[i].feature;
+		feature->name = or1k_init.arch_info[i].feature;
 		reg_list[i].feature = feature;
 
-		reg_list[i].group = or1k_core_reg_list_arch_info[i].group;
+		reg_list[i].group = or1k_init.arch_info[i].group;
 		reg_list[i].size = 32;
 		reg_list[i].value = calloc(1, 4);
 		reg_list[i].dirty = 0;
@@ -600,7 +609,7 @@ static int or1k_halt(struct target *target)
 		}
 	}
 
-	int retval = du_core->or1k_cpu_stall(&or1k->jtag, CPU_STALL);
+	int retval = du_core->or1k_cpu_stall(or1k->jtag, target->coreid, CPU_STALL);
 	if (retval != ERROR_OK) {
 		LOG_ERROR("Impossible to stall the CPU");
 		return retval;
@@ -627,13 +636,13 @@ static int or1k_is_cpu_running(struct target *target, int *running)
 
 		tries++;
 
-		retval = du_core->or1k_is_cpu_running(&or1k->jtag, running);
+		retval = du_core->or1k_is_cpu_running(or1k->jtag, target->coreid, running);
 		if (retval != ERROR_OK) {
 			LOG_WARNING("Debug IF CPU control reg read failure.");
 			/* Try once to restart the JTAG infrastructure -
 			   quite possibly the board has just been reset. */
 			LOG_WARNING("Resetting JTAG TAP state and reconnectiong to debug IF.");
-			du_core->or1k_jtag_init(&or1k->jtag);
+			du_core->or1k_jtag_init(or1k->jtag);
 
 			LOG_WARNING("...attempt %d of %d", tries, RETRIES_MAX);
 
@@ -724,7 +733,7 @@ static int or1k_assert_reset(struct target *target)
 
 	LOG_DEBUG("-");
 
-	int retval = du_core->or1k_cpu_reset(&or1k->jtag, CPU_RESET);
+	int retval = du_core->or1k_cpu_reset(or1k->jtag, target->coreid, CPU_RESET);
 	if (retval != ERROR_OK) {
 		LOG_ERROR("Error while asserting RESET");
 		return retval;
@@ -740,7 +749,7 @@ static int or1k_deassert_reset(struct target *target)
 
 	LOG_DEBUG("-");
 
-	int retval = du_core->or1k_cpu_reset(&or1k->jtag, CPU_NOT_RESET);
+	int retval = du_core->or1k_cpu_reset(or1k->jtag, target->coreid, CPU_NOT_RESET);
 	if (retval != ERROR_OK) {
 		LOG_ERROR("Error while desasserting RESET");
 		return retval;
@@ -756,7 +765,7 @@ static int or1k_soft_reset_halt(struct target *target)
 
 	LOG_DEBUG("-");
 
-	int retval = du_core->or1k_cpu_stall(&or1k->jtag, CPU_STALL);
+	int retval = du_core->or1k_cpu_stall(or1k->jtag, target->coreid, CPU_STALL);
 	if (retval != ERROR_OK) {
 		LOG_ERROR("Error while stalling the CPU");
 		return retval;
@@ -819,7 +828,7 @@ static int or1k_resume_or_step(struct target *target, int current,
 	}
 
 	/* read debug registers (starting from DMR1 register) */
-	retval = du_core->or1k_jtag_read_cpu(&or1k->jtag, OR1K_DMR1_CPU_REG_ADD,
+	retval = du_core->or1k_jtag_read_cpu(or1k->jtag, target->coreid, OR1K_DMR1_CPU_REG_ADD,
 					     OR1K_DEBUG_REG_NUM, debug_reg_list);
 	if (retval != ERROR_OK) {
 		LOG_ERROR("Error while reading debug registers");
@@ -846,7 +855,7 @@ static int or1k_resume_or_step(struct target *target, int current,
 		debug_reg_list[OR1K_DEBUG_REG_DSR] |= OR1K_DSR_TE;
 
 	/* Write debug registers (starting from DMR1 register) */
-	retval = du_core->or1k_jtag_write_cpu(&or1k->jtag, OR1K_DMR1_CPU_REG_ADD,
+	retval = du_core->or1k_jtag_write_cpu(or1k->jtag, target->coreid, OR1K_DMR1_CPU_REG_ADD,
 					      OR1K_DEBUG_REG_NUM, debug_reg_list);
 	if (retval != ERROR_OK) {
 		LOG_ERROR("Error while writing back debug registers");
@@ -869,7 +878,7 @@ static int or1k_resume_or_step(struct target *target, int current,
 	}
 
 	/* Unstall time */
-	retval = du_core->or1k_cpu_stall(&or1k->jtag, CPU_UNSTALL);
+	retval = du_core->or1k_cpu_stall(or1k->jtag, target->coreid, CPU_UNSTALL);
 	if (retval != ERROR_OK) {
 		LOG_ERROR("Error while unstalling the CPU");
 		return retval;
@@ -932,7 +941,8 @@ static int or1k_add_breakpoint(struct target *target,
 		LOG_ERROR("HW breakpoints not supported for now. Doing SW breakpoint.");
 
 	/* Read and save the instruction */
-	int retval = du_core->or1k_jtag_read_memory(&or1k->jtag,
+	int retval = du_core->or1k_jtag_read_memory(or1k->jtag,
+					 target->endianness,
 					 breakpoint->address,
 					 4,
 					 1,
@@ -952,7 +962,8 @@ static int or1k_add_breakpoint(struct target *target,
 	/* Sub in the OR1K trap instruction */
 	uint8_t or1k_trap_insn[4];
 	target_buffer_set_u32(target, or1k_trap_insn, OR1K_TRAP_INSTR);
-	retval = du_core->or1k_jtag_write_memory(&or1k->jtag,
+	retval = du_core->or1k_jtag_write_memory(or1k->jtag,
+					  target->endianness,
 					  breakpoint->address,
 					  4,
 					  1,
@@ -966,7 +977,7 @@ static int or1k_add_breakpoint(struct target *target,
 
 	/* invalidate instruction cache */
 	uint32_t addr = breakpoint->address;
-	retval = du_core->or1k_jtag_write_cpu(&or1k->jtag,
+	retval = du_core->or1k_jtag_write_cpu(or1k->jtag, target->coreid,
 			OR1K_ICBIR_CPU_REG_ADD, 1, &addr);
 	if (retval != ERROR_OK) {
 		LOG_ERROR("Error while invalidating the ICACHE");
@@ -991,7 +1002,8 @@ static int or1k_remove_breakpoint(struct target *target,
 		LOG_ERROR("HW breakpoints not supported for now. Doing SW breakpoint.");
 
 	/* Replace the removed instruction */
-	int retval = du_core->or1k_jtag_write_memory(&or1k->jtag,
+	int retval = du_core->or1k_jtag_write_memory(or1k->jtag,
+					  target->endianness,
 					  breakpoint->address,
 					  4,
 					  1,
@@ -1005,7 +1017,7 @@ static int or1k_remove_breakpoint(struct target *target,
 
 	/* invalidate instruction cache */
 	uint32_t addr = breakpoint->address;
-	retval = du_core->or1k_jtag_write_cpu(&or1k->jtag,
+	retval = du_core->or1k_jtag_write_cpu(or1k->jtag, target->coreid,
 			OR1K_ICBIR_CPU_REG_ADD, 1, &addr);
 	if (retval != ERROR_OK) {
 		LOG_ERROR("Error while invalidating the ICACHE");
@@ -1053,7 +1065,7 @@ static int or1k_read_memory(struct target *target, target_addr_t address,
 		return ERROR_TARGET_UNALIGNED_ACCESS;
 	}
 
-	return du_core->or1k_jtag_read_memory(&or1k->jtag, address, size, count, buffer);
+	return du_core->or1k_jtag_read_memory(or1k->jtag, target->endianness, address, size, count, buffer);
 }
 
 static int or1k_write_memory(struct target *target, target_addr_t address,
@@ -1080,30 +1092,26 @@ static int or1k_write_memory(struct target *target, target_addr_t address,
 		return ERROR_TARGET_UNALIGNED_ACCESS;
 	}
 
-	return du_core->or1k_jtag_write_memory(&or1k->jtag, address, size, count, buffer);
+	return du_core->or1k_jtag_write_memory(or1k->jtag, target->endianness, address, size, count, buffer);
 }
 
 static int or1k_init_target(struct command_context *cmd_ctx,
 		struct target *target)
 {
 	struct or1k_common *or1k = target_to_or1k(target);
-	struct or1k_du *du_core = or1k_to_du(or1k);
-	struct or1k_jtag *jtag = &or1k->jtag;
 
-	if (du_core == NULL) {
+	if (jtag_state.du_core == NULL) {
 		LOG_ERROR("No debug unit selected");
 		return ERROR_FAIL;
 	}
 
-	if (jtag->tap_ip == NULL) {
+	if (jtag_state.tap_ip == NULL) {
 		LOG_ERROR("No tap selected");
 		return ERROR_FAIL;
 	}
 
-	or1k->jtag.tap = target->tap;
-	or1k->jtag.or1k_jtag_inited = 0;
-	or1k->jtag.or1k_jtag_module_selected = -1;
-	or1k->jtag.target = target;
+	or1k->jtag = &jtag_state;
+	or1k->jtag->tap = target->tap;
 
 	or1k_build_reg_cache(target);
 
@@ -1119,13 +1127,19 @@ static int or1k_target_create(struct target *target, Jim_Interp *interp)
 
 	target->arch_info = or1k;
 
-	or1k_create_reg_list(target);
+	/* If we haven't done it yet build up the global reg descriptors */
+	if (or1k_init.arch_info == NULL) {
+		or1k_create_reg_list(target);
+	}
 
-	or1k_tap_vjtag_register();
-	or1k_tap_xilinx_bscan_register();
-	or1k_tap_mohor_register();
+	/* only register or1k drivers if not previously done */
+	if (list_empty(&du_list) && list_empty(&tap_list)) {
+		or1k_tap_vjtag_register();
+		or1k_tap_xilinx_bscan_register();
+		or1k_tap_mohor_register();
 
-	or1k_du_adv_register();
+		or1k_du_adv_register();
+	}
 
 	return ERROR_OK;
 }
@@ -1141,7 +1155,7 @@ static int or1k_examine(struct target *target)
 
 		int running;
 
-		int retval = du_core->or1k_is_cpu_running(&or1k->jtag, &running);
+		int retval = du_core->or1k_is_cpu_running(or1k->jtag, target->coreid, &running);
 		if (retval != ERROR_OK) {
 			LOG_ERROR("Couldn't read the CPU state");
 			return retval;
@@ -1239,7 +1253,7 @@ static int or1k_profiling(struct target *target, uint32_t *samples,
 
 	for (;;) {
 		uint32_t reg_value;
-		retval = du_core->or1k_jtag_read_cpu(&or1k->jtag, GROUP0 + 16 /* NPC */, 1, &reg_value);
+		retval = du_core->or1k_jtag_read_cpu(or1k->jtag, target->coreid, GROUP0 + 16 /* NPC */, 1, &reg_value);
 		if (retval != ERROR_OK) {
 			LOG_ERROR("Error while reading NPC");
 			return retval;
@@ -1261,9 +1275,6 @@ static int or1k_profiling(struct target *target, uint32_t *samples,
 
 COMMAND_HANDLER(or1k_tap_select_command_handler)
 {
-	struct target *target = get_current_target(CMD_CTX);
-	struct or1k_common *or1k = target_to_or1k(target);
-	struct or1k_jtag *jtag = &or1k->jtag;
 	struct or1k_tap_ip *or1k_tap;
 
 	if (CMD_ARGC != 1)
@@ -1272,7 +1283,7 @@ COMMAND_HANDLER(or1k_tap_select_command_handler)
 	list_for_each_entry(or1k_tap, &tap_list, list) {
 		if (or1k_tap->name) {
 			if (!strcmp(CMD_ARGV[0], or1k_tap->name)) {
-				jtag->tap_ip = or1k_tap;
+				jtag_state.tap_ip = or1k_tap;
 				LOG_INFO("%s tap selected", or1k_tap->name);
 				return ERROR_OK;
 			}
@@ -1300,9 +1311,6 @@ COMMAND_HANDLER(or1k_tap_list_command_handler)
 
 COMMAND_HANDLER(or1k_du_select_command_handler)
 {
-	struct target *target = get_current_target(CMD_CTX);
-	struct or1k_common *or1k = target_to_or1k(target);
-	struct or1k_jtag *jtag = &or1k->jtag;
 	struct or1k_du *or1k_du;
 
 	if (CMD_ARGC > 2)
@@ -1311,7 +1319,7 @@ COMMAND_HANDLER(or1k_du_select_command_handler)
 	list_for_each_entry(or1k_du, &du_list, list) {
 		if (or1k_du->name) {
 			if (!strcmp(CMD_ARGV[0], or1k_du->name)) {
-				jtag->du_core = or1k_du;
+				jtag_state.du_core = or1k_du;
 				LOG_INFO("%s debug unit selected", or1k_du->name);
 
 				if (CMD_ARGC == 2) {
@@ -1348,7 +1356,6 @@ COMMAND_HANDLER(or1k_du_list_command_handler)
 
 COMMAND_HANDLER(or1k_addreg_command_handler)
 {
-	struct target *target = get_current_target(CMD_CTX);
 	struct or1k_core_reg new_reg;
 
 	if (CMD_ARGC != 4)
@@ -1365,7 +1372,7 @@ COMMAND_HANDLER(or1k_addreg_command_handler)
 	new_reg.feature = strdup(CMD_ARGV[2]);
 	new_reg.group = strdup(CMD_ARGV[3]);
 
-	or1k_add_reg(target, &new_reg);
+	or1k_add_reg(&new_reg);
 
 	LOG_DEBUG("Add reg \"%s\" @ 0x%08" PRIx32 ", group \"%s\", feature \"%s\"",
 		  new_reg.name, addr, new_reg.group, new_reg.feature);
