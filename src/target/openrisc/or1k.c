@@ -38,6 +38,9 @@
 #include "or1k.h"
 #include "or1k_du.h"
 
+#define foreach_smp_target(pos, head) \
+	for (pos = head; (pos != NULL); pos = pos->next)
+
 LIST_HEAD(tap_list);
 LIST_HEAD(du_list);
 
@@ -582,13 +585,13 @@ static int or1k_debug_entry(struct target *target)
 	return retval;
 }
 
-static int or1k_halt(struct target *target)
+static int or1k_halt_one(struct target *target)
 {
 	struct or1k_common *or1k = target_to_or1k(target);
 	struct or1k_du *du_core = or1k_to_du(or1k);
 
-	LOG_DEBUG("target->state: %s",
-		  target_state_name(target));
+	LOG_DEBUG("target->state: %s, target->coreid: %d",
+		  target_state_name(target), target->coreid);
 
 	if (target->state == TARGET_HALTED) {
 		LOG_DEBUG("Target was already halted");
@@ -618,6 +621,24 @@ static int or1k_halt(struct target *target)
 	target->debug_reason = DBG_REASON_DBGRQ;
 
 	return ERROR_OK;
+}
+
+static int or1k_halt(struct target *target)
+{
+	struct target *curr;
+	struct target_list *head;
+	int retval = 0;
+
+	foreach_smp_target(head, target->head) {
+		curr = head->target;
+		if (curr == target)
+			continue;
+
+		retval += or1k_halt_one(curr);
+	}
+	retval += or1k_halt_one(target);
+
+	return retval;
 }
 
 static int or1k_is_cpu_running(struct target *target, int *running)
@@ -726,7 +747,7 @@ static int or1k_poll(struct target *target)
 	return ERROR_OK;
 }
 
-static int or1k_assert_reset(struct target *target)
+static int or1k_assert_reset_one(struct target *target)
 {
 	struct or1k_common *or1k = target_to_or1k(target);
 	struct or1k_du *du_core = or1k_to_du(or1k);
@@ -742,7 +763,25 @@ static int or1k_assert_reset(struct target *target)
 	return ERROR_OK;
 }
 
-static int or1k_deassert_reset(struct target *target)
+static int or1k_assert_reset(struct target *target)
+{
+	struct target_list *head;
+	struct target *curr;
+	int retval = 0;
+
+	foreach_smp_target(head, target->head) {
+		curr = head->target;
+		if (curr == target)
+			continue;
+
+		retval += or1k_assert_reset_one(curr);
+	}
+	retval += or1k_assert_reset_one(target);
+
+	return retval;
+}
+
+static int or1k_deassert_reset_one(struct target *target)
 {
 	struct or1k_common *or1k = target_to_or1k(target);
 	struct or1k_du *du_core = or1k_to_du(or1k);
@@ -756,6 +795,24 @@ static int or1k_deassert_reset(struct target *target)
 	}
 
 	return ERROR_OK;
+}
+
+static int or1k_deassert_reset(struct target *target)
+{
+	struct target_list *head;
+	struct target *curr;
+	int retval = 0;
+
+	foreach_smp_target(head, target->head) {
+		curr = head->target;
+		if (curr == target)
+			continue;
+
+		retval += or1k_deassert_reset_one(curr);
+	}
+	retval += or1k_deassert_reset_one(target);
+
+	return retval;
 }
 
 static int or1k_soft_reset_halt(struct target *target)
@@ -905,7 +962,7 @@ static int or1k_resume_or_step(struct target *target, int current,
 	return ERROR_OK;
 }
 
-static int or1k_resume(struct target *target, int current,
+static int or1k_resume_one(struct target *target, int current,
 		       target_addr_t address, int handle_breakpoints,
 		       int debug_execution)
 {
@@ -913,6 +970,28 @@ static int or1k_resume(struct target *target, int current,
 				   handle_breakpoints,
 				   debug_execution,
 				   NO_SINGLE_STEP);
+}
+
+static int or1k_resume(struct target *target, int current,
+		       target_addr_t address, int handle_breakpoints,
+		       int debug_execution)
+{
+	struct target_list *head;
+	struct target *curr;
+	int retval = 0;
+
+	foreach_smp_target(head, target->head) {
+		curr = head->target;
+		if (curr == target)
+			continue;
+
+		retval += or1k_resume_one(curr, current, address,
+				handle_breakpoints, debug_execution);
+	}
+	retval += or1k_resume_one(target, current, address, handle_breakpoints,
+				debug_execution);
+
+	return retval;
 }
 
 static int or1k_step(struct target *target, int current,
