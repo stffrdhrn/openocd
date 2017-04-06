@@ -641,6 +641,17 @@ static int or1k_halt(struct target *target)
 	return retval;
 }
 
+static int update_halt_gdb(struct target *target)
+{
+	int retval = 0;
+	if (target->gdb_service && target->gdb_service->core[0] == -1) {
+		target->gdb_service->target = target;
+		target->gdb_service->core[0] = target->coreid;
+		retval += or1k_halt(target);
+	}
+	return retval;
+}
+
 static int or1k_is_cpu_running(struct target *target, int *running)
 {
 	struct or1k_common *or1k = target_to_or1k(target);
@@ -678,10 +689,34 @@ static int or1k_is_cpu_running(struct target *target, int *running)
 	return retval;
 }
 
+static struct target *get_target_by_coreid(struct target *target, int32_t coreid)
+{
+	struct target *curr;
+	struct target_list *head;
+
+	foreach_smp_target(head, target->head) {
+		curr = head->target;
+
+		if ((curr->coreid == coreid) && (curr->state == TARGET_HALTED))
+			return curr;
+	}
+	return target;
+}
+
 static int or1k_poll(struct target *target)
 {
-	int retval;
+	int retval = ERROR_OK;
 	int running;
+
+	if ((target->state == TARGET_HALTED) && (target->smp) &&
+		(target->gdb_service) &&
+		(target->gdb_service->target == NULL)) {
+		target->gdb_service->target =
+			get_target_by_coreid(target, target->gdb_service->core[1]);
+		target_call_event_callbacks(target->gdb_service->target,
+				TARGET_EVENT_HALTED);
+		return retval;
+	}
 
 	retval = or1k_is_cpu_running(target, &running);
 	if (retval != ERROR_OK) {
@@ -694,13 +729,18 @@ static int or1k_poll(struct target *target)
 		/* It's actually stalled, so update our software's state */
 		if ((target->state == TARGET_RUNNING) ||
 		    (target->state == TARGET_RESET)) {
-
 			target->state = TARGET_HALTED;
 
 			retval = or1k_debug_entry(target);
 			if (retval != ERROR_OK) {
 				LOG_ERROR("Error while calling or1k_debug_entry");
 				return retval;
+			}
+
+			if (target->smp) {
+				retval = update_halt_gdb(target);
+				if (retval != ERROR_OK)
+					return retval;
 			}
 
 			target_call_event_callbacks(target,
@@ -712,6 +752,12 @@ static int or1k_poll(struct target *target)
 			if (retval != ERROR_OK) {
 				LOG_ERROR("Error while calling or1k_debug_entry");
 				return retval;
+			}
+
+			if (target->smp) {
+				retval = update_halt_gdb(target);
+				if (retval != ERROR_OK)
+					return retval;
 			}
 
 			target_call_event_callbacks(target,
@@ -979,6 +1025,22 @@ static int or1k_resume(struct target *target, int current,
 	struct target_list *head;
 	struct target *curr;
 	int retval = 0;
+
+	/* dummy resume for smp toggle, when user does 'continue' in
+	   gdb after issuing a 'JcN' packet, 'continue' will not continue, but
+	   will bring the Nth core into gdb scope.  Issuing a 'Jc-1' packet
+	   will disabled the dummy resume. */
+	if ((target->smp) && (target->gdb_service->core[1] != -1)) {
+		/* simulate a start and halt of target */
+		target->gdb_service->target = NULL;
+		target->gdb_service->core[0] = target->gdb_service->core[1];
+		/* fake resume at next poll we play the  target core[1], see poll */
+		target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
+		return 0;
+	}
+	if (target->smp) {
+		target->gdb_service->core[0] = -1;
+	}
 
 	foreach_smp_target(head, target->head) {
 		curr = head->target;
