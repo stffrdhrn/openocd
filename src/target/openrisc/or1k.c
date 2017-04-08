@@ -773,19 +773,6 @@ static int or1k_soft_reset_halt(struct target *target)
 	return ERROR_OK;
 }
 
-static bool is_any_soft_breakpoint(struct target *target)
-{
-	struct breakpoint *breakpoint = target->breakpoints;
-
-	LOG_DEBUG("-");
-
-	while (breakpoint)
-		if (breakpoint->type == BKPT_SOFT)
-			return true;
-
-	return false;
-}
-
 static int or1k_resume_or_step(struct target *target, int current,
 			       uint32_t address, int handle_breakpoints,
 			       int debug_execution, int step)
@@ -839,11 +826,8 @@ static int or1k_resume_or_step(struct target *target, int current,
 		debug_reg_list[OR1K_DEBUG_REG_DMR1] &= ~(OR1K_DMR1_ST | OR1K_DMR1_BT);
 
 	/* Set traps to be handled by the debug unit in the Debug Stop
-	   Register (DSR). Check if we have any software breakpoints in
-	   place before setting this value - the kernel, for instance,
-	   relies on l.trap instructions not stalling the processor ! */
-	if (is_any_soft_breakpoint(target) == true)
-		debug_reg_list[OR1K_DEBUG_REG_DSR] |= OR1K_DSR_TE;
+	   Register (DSR). This allows breakpoints and single stepping to work */
+	debug_reg_list[OR1K_DEBUG_REG_DSR] |= OR1K_DSR_TE;
 
 	/* Write debug registers (starting from DMR1 register) */
 	retval = du_core->or1k_jtag_write_cpu(&or1k->jtag, OR1K_DMR1_CPU_REG_ADD,
